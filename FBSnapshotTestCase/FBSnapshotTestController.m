@@ -14,6 +14,7 @@
 #import <FBSnapshotTestCase/UIImage+Snapshot.h>
 
 #import <UIKit/UIKit.h>
+#import <XCTest/XCTest.h>
 
 NSString *const FBSnapshotTestControllerErrorDomain = @"FBSnapshotTestControllerErrorDomain";
 NSString *const FBReferenceImageFilePathKey = @"FBReferenceImageFilePathKey";
@@ -105,7 +106,22 @@ typedef NS_ENUM(NSUInteger, FBTestSnapshotFileNameType) {
     if (self.recordMode) {
         return [self _recordSnapshotOfViewOrLayer:viewOrLayer selector:selector identifier:identifier error:errorPtr];
     } else {
-        return [self _performPixelComparisonWithViewOrLayer:viewOrLayer selector:selector identifier:identifier perPixelTolerance:perPixelTolerance overallTolerance:overallTolerance error:errorPtr];
+        NSString *activityDescription = [NSString stringWithFormat:@"Verifying view %@ with identifier %@", viewOrLayer, identifier];
+        __block BOOL result = NO;
+        __block NSError *localError = nil;
+        [XCTContext runActivityNamed:activityDescription block:^(id<XCTActivity>  _Nonnull activity) {
+            result = [self _performPixelComparisonWithViewOrLayer:viewOrLayer
+                                                         selector:selector
+                                                       identifier:identifier
+                                                perPixelTolerance:perPixelTolerance
+                                                 overallTolerance:overallTolerance
+                                                         activity:activity
+                                                            error:&localError];
+        }];
+        if (errorPtr != nil) {
+            *errorPtr = localError;
+        }
+        return result;
     }
 }
 
@@ -294,6 +310,7 @@ typedef NS_ENUM(NSUInteger, FBTestSnapshotFileNameType) {
                                     identifier:(NSString *)identifier
                              perPixelTolerance:(CGFloat)perPixelTolerance
                               overallTolerance:(CGFloat)overallTolerance
+                                      activity:(NSObject<XCTActivity> *)activity
                                          error:(NSError **)errorPtr
 {
     UIImage *referenceImage = [self referenceImageForSelector:selector identifier:identifier error:errorPtr];
@@ -302,8 +319,23 @@ typedef NS_ENUM(NSUInteger, FBTestSnapshotFileNameType) {
         BOOL imagesSame = [self compareReferenceImage:referenceImage toImage:snapshot perPixelTolerance:perPixelTolerance overallTolerance:overallTolerance error:errorPtr];
         if (!imagesSame) {
             NSError *saveError = nil;
-            if ([self saveFailedReferenceImage:referenceImage testImage:snapshot selector:selector identifier:identifier error:&saveError] == NO) {
-                NSLog(@"Error saving test images: %@", saveError);
+            if (activity != nil) {
+                XCTAttachment *referenceAttachment = [XCTAttachment attachmentWithImage: referenceImage];
+                referenceAttachment.name = @"Reference";
+                [activity addAttachment:referenceAttachment];
+
+                XCTAttachment *testAttachment = [XCTAttachment attachmentWithImage:snapshot];
+                testAttachment.name = @"Failed";
+                [activity addAttachment:testAttachment];
+
+                UIImage *diffImage = [referenceImage fb_diffWithImage:snapshot];
+                XCTAttachment *diffAttachment = [XCTAttachment attachmentWithImage:diffImage];
+                diffAttachment.name = @"Diff";
+                [activity addAttachment:diffAttachment];
+            } else {
+                if ([self saveFailedReferenceImage:referenceImage testImage:snapshot selector:selector identifier:identifier error:&saveError] == NO) {
+                    NSLog(@"Error saving test images: %@", saveError);
+                }
             }
         }
         return imagesSame;
